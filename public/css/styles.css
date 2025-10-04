@@ -1,0 +1,6 @@
+body { background-color: #0b0f17; color: #e9ecef; }
+.navbar { border-bottom: 1px solid rgba(255,255,255,0.1); }
+.list-group-item { background-color: #141a24; color: #e9ecef; }
+.list-group-item:hover { background-color: #1b2330; cursor: pointer; }
+.vjs-theme-city .vjs-control-bar { background: rgba(0,0,0,0.6); }
+select { background-color: #141a24; color: #e9ecef; border-color: #243043; }
