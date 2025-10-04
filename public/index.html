@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lumex Search & Player</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    body { padding-top: 20px; }
+    .results { max-height: 50vh; overflow: auto; }
+    .poster { width: 80px; height: 120px; object-fit: cover; }
+    .video-container { position: relative; background: #000; }
+    video { width: 100%; height: auto; background: #000; }
+    .ad-overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.85); color: #fff; z-index: 10; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1 class="mb-3">Поиск фильмов и сериалов</h1>
+  <form id="searchForm" class="row g-2 mb-3">
+    <div class="col-sm-6 col-md-8">
+      <input id="q" class="form-control" placeholder="Название, или KP ID" />
+    </div>
+    <div class="col-sm-6 col-md-4 d-flex gap-2">
+      <button class="btn btn-primary flex-grow-1" type="submit">Искать</button>
+      <button id="clearBtn" class="btn btn-secondary" type="button">Сброс</button>
+    </div>
+  </form>
+
+  <div class="row">
+    <div class="col-md-5">
+      <div class="card">
+        <div class="card-header">Результаты</div>
+        <ul id="results" class="list-group list-group-flush results"></ul>
+      </div>
+    </div>
+    <div class="col-md-7">
+      <div class="card mb-3">
+        <div class="card-header">Плеер</div>
+        <div class="card-body">
+          <div class="mb-2 d-flex gap-2 align-items-center">
+            <select id="translationSelect" class="form-select" style="max-width: 360px; display: none;"></select>
+            <select id="seasonSelect" class="form-select" style="max-width: 200px; display: none;"></select>
+            <select id="episodeSelect" class="form-select" style="max-width: 200px; display: none;"></select>
+          </div>
+          <div class="video-container">
+            <div id="adOverlay" class="ad-overlay">Реклама...</div>
+            <video id="video" controls playsinline></video>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">Детали</div>
+        <div class="card-body">
+          <div id="details">Выберите элемент из результатов.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script>
+const resultsEl = document.getElementById('results');
+const formEl = document.getElementById('searchForm');
+const inputEl = document.getElementById('q');
+const clearBtn = document.getElementById('clearBtn');
+const videoEl = document.getElementById('video');
+const translationSelect = document.getElementById('translationSelect');
+const seasonSelect = document.getElementById('seasonSelect');
+const episodeSelect = document.getElementById('episodeSelect');
+const adOverlay = document.getElementById('adOverlay');
+const detailsEl = document.getElementById('details');
+let hls = null;
+let lastStreamMeta = null; // data from /api/stream
+let adTrackingState = null;
+
+function renderResults(data) {
+  resultsEl.innerHTML = '';
+  if (!data || !data.data || data.data.length === 0) {
+    resultsEl.innerHTML = '<li class="list-group-item">Ничего не найдено</li>';
+    return;
+  }
+  for (const item of data.data) {
+    const li = document.createElement('li');
+    li.className = 'list-group-item list-group-item-action';
+    li.style.cursor = 'pointer';
+    li.innerHTML = `<div class="d-flex justify-content-between align-items-center">
+      <div>
+        <div class="fw-bold">${item.title} ${item.year ? '(' + item.year.substring(0,4) + ')' : ''}</div>
+        <div class="text-muted small">${item.type || ''} | KP: ${item.kp_id || item.kinopoisk_id || ''}</div>
+      </div>
+      <div class="small text-secondary">ID: ${item.id}</div>
+    </div>`;
+    li.addEventListener('click', () => onSelectItem(item));
+    resultsEl.appendChild(li);
+  }
+}
+
+formEl.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = inputEl.value.trim();
+  let params = new URLSearchParams();
+  if (/^\d+$/.test(q)) {
+    // looks like kinopoisk id
+    params.set('kp', q);
+  } else if (q.length > 0) {
+    params.set('title', q);
+  }
+  const res = await fetch('/api/search?' + params.toString());
+  const data = await res.json();
+  renderResults(data);
+});
+
+// Debounced live search on typing
+let searchTimer = null;
+inputEl.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(async () => {
+    const q = inputEl.value.trim();
+    if (!q) { resultsEl.innerHTML = ''; return; }
+    const params = new URLSearchParams();
+    if (/^\d+$/.test(q)) params.set('kp', q); else params.set('title', q);
+    const res = await fetch('/api/search?' + params.toString());
+    const data = await res.json();
+    renderResults(data);
+  }, 400);
+});
+
+clearBtn.addEventListener('click', () => {
+  inputEl.value = '';
+  resultsEl.innerHTML = '';
+  detailsEl.textContent = 'Выберите элемент из результатов.';
+  stopPlayback();
+});
+
+function stopPlayback() {
+  if (hls) { hls.destroy(); hls = null; }
+  videoEl.pause();
+  videoEl.removeAttribute('src');
+  videoEl.load();
+}
+
+async function onSelectItem(item) {
+  stopPlayback();
+  translationSelect.style.display = 'none';
+  seasonSelect.style.display = 'none';
+  episodeSelect.style.display = 'none';
+  translationSelect.innerHTML = '';
+  seasonSelect.innerHTML = '';
+  episodeSelect.innerHTML = '';
+
+  detailsEl.innerHTML = `<div><b>${item.title}</b> (${item.year ? item.year.substring(0,4) : ''})</div>`;
+
+  const params = new URLSearchParams();
+  if (item.kp_id || item.kinopoisk_id) params.set('kpId', item.kp_id || item.kinopoisk_id);
+  else params.set('contentId', item.id);
+  params.set('contentType', item.type === 'serial' ? 'tv-series' : 'short');
+
+  const streamRes = await fetch('/api/stream?' + params.toString());
+  const streamData = await streamRes.json();
+  lastStreamMeta = streamData;
+
+  const player = streamData.player;
+  if (!player) {
+    detailsEl.innerHTML += '<div class="text-danger">Нет данных для воспроизведения.</div>';
+    return;
+  }
+
+  if (player.content_type === 'movie') {
+    setupMovie(player);
+  } else if (player.content_type === 'tv-series') {
+    setupSeries(player);
+  }
+}
+
+function setupMovie(player) {
+  const media = player.media || [];
+  if (!media.length) return;
+  translationSelect.style.display = 'inline-block';
+  translationSelect.innerHTML = media.map(m => `<option value="${m.playlist}">${m.translation_name || 'Перевод'} (до ${m.max_quality || ''}p)</option>`).join('');
+  translationSelect.onchange = () => playPlaylist(translationSelect.value);
+  playPlaylist(media[0].playlist);
+}
+
+function setupSeries(player) {
+  const seasons = player.media || [];
+  if (!seasons.length) return;
+  seasonSelect.style.display = 'inline-block';
+  episodeSelect.style.display = 'inline-block';
+
+  seasonSelect.innerHTML = seasons.map((s, i) => `<option value="${i}">${s.season_name || 'Сезон ' + (i+1)}</option>`).join('');
+  seasonSelect.onchange = () => onSeasonChange(player);
+  onSeasonChange(player);
+}
+
+function onSeasonChange(player) {
+  const seasons = player.media || [];
+  const sIdx = parseInt(seasonSelect.value || '0', 10) || 0;
+  const episodes = (seasons[sIdx] && seasons[sIdx].episodes) || [];
+  episodeSelect.innerHTML = episodes.map((e, i) => `<option value="${i}">${e.name || ('Серия ' + (i+1))}</option>`).join('');
+  episodeSelect.onchange = () => onEpisodeChange(player);
+  onEpisodeChange(player);
+}
+
+function onEpisodeChange(player) {
+  const seasons = player.media || [];
+  const sIdx = parseInt(seasonSelect.value || '0', 10) || 0;
+  const episodes = (seasons[sIdx] && seasons[sIdx].episodes) || [];
+  const eIdx = parseInt(episodeSelect.value || '0', 10) || 0;
+  const episode = episodes[eIdx];
+  const translations = episode.media || [];
+  translationSelect.style.display = 'inline-block';
+  translationSelect.innerHTML = translations.map(m => `<option value="${m.playlist}">${m.translation_name || 'Перевод'} (до ${m.max_quality || ''}p)</option>`).join('');
+  translationSelect.onchange = () => playPlaylist(translationSelect.value);
+  if (translations[0]) playPlaylist(translations[0].playlist);
+}
+
+async function playPlaylist(playlistPath) {
+  try {
+    await maybePlayPreroll();
+  } catch (e) {
+    console.warn('Ad error', e);
+  }
+  const verifyRes = await fetch('/api/verify?playlistPath=' + encodeURIComponent(playlistPath), { method: 'POST' });
+  const hlsUrl = await verifyRes.text();
+  startHls(hlsUrl);
+}
+
+function startHls(hlsUrl) {
+  stopPlayback();
+  if (Hls.isSupported()) {
+    hls = new Hls();
+    hls.loadSource(hlsUrl);
+    hls.attachMedia(videoEl);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { videoEl.play(); });
+  } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+    videoEl.src = hlsUrl;
+    videoEl.addEventListener('loadedmetadata', () => { videoEl.play(); });
+  } else {
+    alert('HLS не поддерживается этим браузером.');
+  }
+}
+
+async function maybePlayPreroll() {
+  const rolls = (lastStreamMeta && lastStreamMeta.ads && lastStreamMeta.ads.rolls) || [];
+  const tag = rolls[0] && rolls[0].tag_url;
+  if (!tag) return;
+  try {
+    const vastRes = await fetch('/api/vast?tag=' + encodeURIComponent(tag));
+    const vast = await vastRes.json();
+    const mediaFileUrl = pickVastMediaUrl(vast);
+    const trackers = collectVastTracking(vast);
+    if (!mediaFileUrl) return;
+    adOverlay.style.display = 'flex';
+    await playPreroll(mediaFileUrl, trackers);
+  } catch (e) {
+    console.warn('VAST preroll error', e);
+  } finally {
+    adOverlay.style.display = 'none';
+  }
+}
+
+function pickVastMediaUrl(vastJson) {
+  try {
+    const vast = vastJson.vast || vastJson.VAST || vastJson.vastXml || vastJson;
+    const inline = vast?.VAST?.Ad?.InLine || vast?.Ad?.InLine || (Array.isArray(vast?.VAST?.Ad) ? vast.VAST.Ad[0].InLine : null);
+    const mediaFiles = inline?.Creatives?.Creative?.Linear?.MediaFiles?.MediaFile
+      || (Array.isArray(inline?.Creatives?.Creative) ? inline.Creatives.Creative[0]?.Linear?.MediaFiles?.MediaFile : null)
+      || [];
+    const files = Array.isArray(mediaFiles) ? mediaFiles : [mediaFiles];
+    // Prefer HLS, then MP4
+    const hls = files.find(f => typeof f === 'object' && (f['@_type']?.includes('application/vnd.apple.mpegurl') || f['@_delivery'] === 'streaming'));
+    if (hls && hls['#text']) return hls['#text'];
+    const mp4 = files.find(f => typeof f === 'object' && (f['@_type']?.includes('mp4') || f['@_codec']?.includes('avc')));
+    if (mp4 && mp4['#text']) return mp4['#text'];
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
+function playPreroll(url, trackers) {
+  return new Promise((resolve) => {
+    let adHls = null;
+    fireVast(trackers?.impression || []);
+    setupQuartileTracking(trackers);
+    const onEnded = () => {
+      videoEl.removeEventListener('ended', onEnded);
+      videoEl.removeEventListener('error', onEnded);
+      teardownQuartileTracking();
+      fireVast(trackers?.complete || []);
+      if (adHls) { adHls.destroy(); adHls = null; }
+      resolve();
+    };
+    if (Hls.isSupported() && url.includes('.m3u8')) {
+      adHls = new Hls();
+      adHls.loadSource(url);
+      adHls.attachMedia(videoEl);
+      adHls.on(Hls.Events.MANIFEST_PARSED, () => { videoEl.play(); });
+    } else {
+      videoEl.src = url;
+      videoEl.play();
+    }
+    videoEl.addEventListener('ended', onEnded, { once: true });
+    videoEl.addEventListener('error', onEnded, { once: true });
+  });
+}
+
+function collectVastTracking(vastJson) {
+  const trackers = { impression: [], start: [], firstQuartile: [], midpoint: [], thirdQuartile: [], complete: [] };
+  try {
+    const root = vastJson.vast || vastJson.VAST || vastJson.vastXml || vastJson;
+    const ad = Array.isArray(root?.VAST?.Ad) ? root.VAST.Ad[0] : (root?.VAST?.Ad || root?.Ad);
+    const inline = ad?.InLine || ad?.Inline || ad?.InLine;
+    const impressions = inline?.Impression || inline?.Impressions || [];
+    const impArr = Array.isArray(impressions) ? impressions : [impressions];
+    for (const imp of impArr) {
+      if (!imp) continue;
+      const url = typeof imp === 'string' ? imp : (imp['#text'] || imp._text || imp.url);
+      if (url) trackers.impression.push(url);
+    }
+    const tracking = inline?.Creatives?.Creative?.Linear?.TrackingEvents?.Tracking
+      || (Array.isArray(inline?.Creatives?.Creative) ? inline.Creatives.Creative[0]?.Linear?.TrackingEvents?.Tracking : null)
+      || [];
+    const trArr = Array.isArray(tracking) ? tracking : [tracking];
+    for (const t of trArr) {
+      if (!t) continue;
+      const ev = t['@_event'] || t.event;
+      const url = t['#text'] || t._text || t.url;
+      if (!ev || !url) continue;
+      if (trackers[ev]) trackers[ev].push(url);
+    }
+  } catch (e) { /* ignore */ }
+  return trackers;
+}
+
+function fireVast(urls) {
+  for (const u of urls || []) {
+    try {
+      if (navigator.sendBeacon) navigator.sendBeacon(u);
+      else new Image().src = u;
+    } catch (e) { /* ignore */ }
+  }
+}
+
+function setupQuartileTracking(trackers) {
+  adTrackingState = { start: false, q1: false, q2: false, q3: false };
+  const handler = () => {
+    const d = videoEl.duration;
+    const t = videoEl.currentTime;
+    if (!isFinite(d) || d <= 0) return;
+    if (!adTrackingState.start && t > 0.5) { fireVast(trackers?.start || []); adTrackingState.start = true; }
+    if (!adTrackingState.q1 && t / d >= 0.25) { fireVast(trackers?.firstQuartile || []); adTrackingState.q1 = true; }
+    if (!adTrackingState.q2 && t / d >= 0.5) { fireVast(trackers?.midpoint || []); adTrackingState.q2 = true; }
+    if (!adTrackingState.q3 && t / d >= 0.75) { fireVast(trackers?.thirdQuartile || []); adTrackingState.q3 = true; }
+  };
+  videoEl.addEventListener('timeupdate', handler);
+  adTrackingState.listener = handler;
+}
+
+function teardownQuartileTracking() {
+  if (adTrackingState?.listener) videoEl.removeEventListener('timeupdate', adTrackingState.listener);
+  adTrackingState = null;
+}
+</script>
+</body>
+</html>
