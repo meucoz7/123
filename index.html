@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Поиск фильмов - Lumex Player</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="styles.css" rel="stylesheet">
+    <style>
+        .movie-card {
+            transition: transform 0.3s ease;
+            cursor: pointer;
+        }
+        .movie-card:hover {
+            transform: translateY(-5px);
+        }
+        .player-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 9999;
+            display: none;
+        }
+        .player-wrapper {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .video-player {
+            width: 90%;
+            height: 80%;
+            background: #000;
+        }
+        .close-player {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            font-size: 24px;
+            padding: 10px;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        .loading-spinner {
+            display: none;
+        }
+        .search-results {
+            min-height: 400px;
+        }
+        .movie-poster {
+            width: 100%;
+            height: 300px;
+            object-fit: cover;
+        }
+        .translation-selector {
+            margin-bottom: 15px;
+        }
+        .quality-badge {
+            font-size: 0.8em;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <nav class="navbar navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-film me-2"></i>Lumex Movie Search
+            </a>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mt-4">
+        <!-- Search Form -->
+        <div class="row mb-4">
+            <div class="col-md-8 mx-auto">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Поиск фильмов и сериалов</h5>
+                        <form id="searchForm">
+                            <div class="row">
+                                <div class="col-md-8">
+                                    <input type="text" class="form-control" id="searchInput" 
+                                           placeholder="Введите название фильма или сериала...">
+                                </div>
+                                <div class="col-md-4">
+                                    <button type="submit" class="btn btn-primary w-100">
+                                        <i class="fas fa-search me-2"></i>Поиск
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Spinner -->
+        <div class="text-center loading-spinner" id="loadingSpinner">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Загрузка...</span>
+            </div>
+            <p class="mt-2">Поиск фильмов...</p>
+        </div>
+
+        <!-- Search Results -->
+        <div class="search-results" id="searchResults">
+            <!-- Results will be populated here -->
+        </div>
+
+        <!-- Pagination -->
+        <nav aria-label="Page navigation" id="paginationNav" style="display: none;">
+            <ul class="pagination justify-content-center" id="pagination">
+                <!-- Pagination will be populated here -->
+            </ul>
+        </nav>
+    </div>
+
+    <!-- Video Player Modal -->
+    <div class="player-container" id="playerContainer">
+        <div class="player-wrapper">
+            <button class="close-player" id="closePlayer">
+                <i class="fas fa-times"></i>
+            </button>
+            
+            <!-- Movie Info -->
+            <div class="position-absolute top-0 start-0 m-4 text-white" id="movieInfo">
+                <h4 id="movieTitle"></h4>
+                <p id="movieYear"></p>
+            </div>
+
+            <!-- Translation Selector -->
+            <div class="position-absolute top-0 end-0 m-4" id="translationSelector" style="display: none;">
+                <select class="form-select" id="translationSelect">
+                    <!-- Translation options will be populated here -->
+                </select>
+            </div>
+
+            <!-- Video Player -->
+            <video class="video-player" id="videoPlayer" controls>
+                <source src="" type="application/x-mpegURL">
+                Ваш браузер не поддерживает воспроизведение видео.
+            </video>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="script.js"></script>
+</body>
+</html>
